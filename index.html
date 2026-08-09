@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coach d'études — Consultation</title>
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#4f46e5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Coach (consultation)">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root { --primary:#4f46e5; --primary-dark:#4338ca; --bg:#f7f7fb; --surface:#fff; --border:#e5e5ef; --text:#1f2033; --muted:#6b6d85; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  header { background:var(--primary); color:#fff; padding:1rem 1.2rem; }
+  header h1 { margin:0; font-size:1.15rem; }
+  header p { margin:0.2rem 0 0; font-size:0.8rem; opacity:0.85; }
+  main { max-width:640px; margin:0 auto; padding:1rem; }
+  .carte { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:1rem 1.1rem; margin-bottom:1rem; }
+  .badge { display:inline-block; background:#fef3c7; color:#92400e; font-size:0.72rem; font-weight:700; padding:3px 10px; border-radius:999px; margin-bottom:0.6rem; }
+  .bouton { display:inline-flex; align-items:center; gap:8px; background:var(--primary); color:#fff; border:none; padding:11px 18px; border-radius:999px; font-weight:700; font-size:0.9rem; cursor:pointer; text-decoration:none; }
+  .bouton:hover { background:var(--primary-dark); }
+  .lien-secondaire { display:block; text-align:center; margin-top:0.8rem; font-size:0.82rem; color:var(--muted); }
+  .stat { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border); font-size:0.9rem; }
+  .stat:last-child { border-bottom:none; }
+  .muted { color:var(--muted); font-size:0.82rem; }
+  .liste-item { padding:8px 0; border-bottom:1px solid var(--border); font-size:0.88rem; }
+  .liste-item:last-child { border-bottom:none; }
+  .liste-item a { color:var(--primary-dark); text-decoration:none; font-weight:600; }
+  #zone-connexion { text-align:center; padding:2rem 1rem; }
+  #zone-contenu { display:none; }
+  .maj { font-size:0.75rem; color:var(--muted); text-align:right; margin-top:-0.4rem; margin-bottom:0.8rem; }
+  .contenu-md { font-size:0.88rem; line-height:1.5; }
+  .contenu-md :first-child { margin-top:0; }
+  #retour { display:none; margin-bottom:1rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Coach d'études</h1>
+  <p>Mode consultation — lecture seule, données synchronisées depuis ton PC</p>
+</header>
+<main>
+
+  <div id="zone-connexion">
+    <p class="muted">Connecte-toi avec ton compte Google pour voir tes dernières données.</p>
+    <div id="bouton-google" style="display:flex; justify-content:center; margin-top:1rem;"></div>
+  </div>
+
+  <div id="zone-contenu">
+    <a id="retour" href="#" onclick="afficherAccueil(); return false;">&larr; Retour à l'accueil</a>
+    <div id="corps"></div>
+  </div>
+
+</main>
+
+<script>
+const CLIENT_ID = "REMPLACE_MOI_CLIENT_ID.apps.googleusercontent.com";
+const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+const DOSSIERS = {
+  suivi: "1ybTSSpHystTDUgDTzT5Z0d4vbRep9PPo",
+  examens: "1Ogv4MZEZWHrfljFKYTCkof0ybQtT1yn8",
+  corrections: "1fU_m7yD1kbY8PAStcRnfEwuNu8WMkeDw",
+  lecons: "1SRAqEKGu8VCA_bkExZYWZU9W6UuiOvBh",
+  resumes: "1judLTj4ihJL8TaebDmEo_Kaw6hXImBIU",
+  approfondissement: "1KjIiVIk5oz1p7nAvWd2DG_FVxWH03CXU",
+};
+
+let accessToken = null;
+
+function initGoogle() {
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPE,
+    callback: (resp) => {
+      if (resp.error) { alert("Connexion refusée : " + resp.error); return; }
+      accessToken = resp.access_token;
+      document.getElementById("zone-connexion").style.display = "none";
+      document.getElementById("zone-contenu").style.display = "block";
+      afficherAccueil();
+    },
+  });
+  document.getElementById("bouton-google").innerHTML =
+    '<button class="bouton" onclick="lancerConnexion()">Se connecter avec Google</button>';
+  window._client = client;
+}
+function lancerConnexion() { window._client.requestAccessToken(); }
+
+async function driveFetch(path) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/${path}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!r.ok) throw new Error(`Drive API ${r.status}`);
+  return r.json();
+}
+
+async function listerDossier(folderId) {
+  const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+  const data = await driveFetch(`files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=50`);
+  return data.files || [];
+}
+
+async function lireFichierTexte(fileId) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!r.ok) throw new Error(`Drive API ${r.status}`);
+  return r.text();
+}
+
+async function dernierProgres() {
+  const fichiers = await listerDossier(DOSSIERS.suivi);
+  const progresFiles = fichiers.filter(f => f.name === "progres.json");
+  if (!progresFiles.length) return null;
+  const texte = await lireFichierTexte(progresFiles[0].id);
+  return { data: JSON.parse(texte), maj: progresFiles[0].modifiedTime };
+}
+
+function formatDate(iso) {
+  if (!iso) return "?";
+  const d = new Date(iso);
+  return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+async function afficherAccueil() {
+  document.getElementById("retour").style.display = "none";
+  const corps = document.getElementById("corps");
+  corps.innerHTML = '<p class="muted">Chargement…</p>';
+  try {
+    const { data, maj } = await dernierProgres() || {};
+    if (!data) { corps.innerHTML = '<p class="muted">Aucune donnée trouvée sur Drive pour l\'instant.</p>'; return; }
+
+    const sessions = (data.sessions || []).slice().reverse();
+    const jours = data.concours && data.concours.date
+      ? Math.ceil((new Date(data.concours.date) - new Date()) / 86400000) : null;
+
+    let html = `<div class="badge">Lecture seule</div>`;
+    html += `<div class="maj">Dernière synchro : ${formatDate(maj)}</div>`;
+
+    html += `<div class="carte">`;
+    html += `<div class="stat"><span>Concours</span><span>${data.concours?.nom || "—"}</span></div>`;
+    html += `<div class="stat"><span>Date</span><span>${data.concours?.date || "—"}${jours !== null ? ` (J-${jours})` : ""}</span></div>`;
+    html += `</div>`;
+
+    html += `<div class="carte"><strong>Dernières sessions</strong>`;
+    if (!sessions.length) html += `<p class="muted">Aucune session enregistrée.</p>`;
+    sessions.slice(0, 5).forEach(s => {
+      html += `<div class="stat"><span>${s.date} — ${s.matiere || ""}</span><span>${s.note}/${s.note_max}</span></div>`;
+    });
+    html += `</div>`;
+
+    if ((data.points_faibles_recurrents || []).length) {
+      html += `<div class="carte"><strong>Lacunes récurrentes</strong><p class="muted">${data.points_faibles_recurrents.join(", ")}</p></div>`;
+    }
+    if ((data.points_forts_confirmes || []).length) {
+      html += `<div class="carte"><strong>Points forts confirmés</strong><p class="muted">${data.points_forts_confirmes.join(", ")}</p></div>`;
+    }
+
+    html += `<div class="carte">
+      <strong>Parcourir</strong>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:0.6rem;">
+        <a class="bouton" href="#" onclick="afficherListe('examens','Examens blancs'); return false;">Examens blancs</a>
+        <a class="bouton" href="#" onclick="afficherListe('corrections','Corrections'); return false;">Corrections</a>
+        <a class="bouton" href="#" onclick="afficherListe('lecons','Leçons'); return false;">Leçons</a>
+        <a class="bouton" href="#" onclick="afficherListe('resumes','Résumés de cours'); return false;">Résumés</a>
+      </div>
+    </div>`;
+
+    html += `<p class="lien-secondaire">Pour générer un nouvel examen, une correction ou une leçon, ouvre l'appli complète sur ton PC (celui-ci doit être allumé).</p>`;
+
+    corps.innerHTML = html;
+  } catch (e) {
+    corps.innerHTML = `<p class="muted">Erreur de chargement : ${e.message}</p>`;
+  }
+}
+
+async function afficherListe(cle, titre) {
+  document.getElementById("retour").style.display = "block";
+  const corps = document.getElementById("corps");
+  corps.innerHTML = `<p class="muted">Chargement de « ${titre} »…</p>`;
+  try {
+    const fichiers = await listerDossier(DOSSIERS[cle]);
+    if (!fichiers.length) { corps.innerHTML = `<div class="carte"><strong>${titre}</strong><p class="muted">Rien pour l'instant.</p></div>`; return; }
+    let html = `<div class="carte"><strong>${titre}</strong>`;
+    fichiers.forEach(f => {
+      html += `<div class="liste-item"><a href="#" onclick="afficherFichier('${f.id}','${f.name.replace(/'/g, "\\'")}'); return false;">${f.name}</a><div class="muted">${formatDate(f.modifiedTime)}</div></div>`;
+    });
+    html += `</div>`;
+    corps.innerHTML = html;
+  } catch (e) {
+    corps.innerHTML = `<p class="muted">Erreur : ${e.message}</p>`;
+  }
+}
+
+async function afficherFichier(fileId, nom) {
+  const corps = document.getElementById("corps");
+  corps.innerHTML = `<p class="muted">Chargement…</p>`;
+  try {
+    const texte = await lireFichierTexte(fileId);
+    let contenu;
+    if (nom.endsWith(".json")) {
+      contenu = `<pre style="white-space:pre-wrap; font-size:0.8rem;">${JSON.stringify(JSON.parse(texte), null, 2)}</pre>`;
+    } else {
+      contenu = `<div class="contenu-md">${marked.parse(texte)}</div>`;
+    }
+    corps.innerHTML = `<div class="carte"><strong>${nom}</strong><div style="margin-top:0.8rem;">${contenu}</div></div>`;
+  } catch (e) {
+    corps.innerHTML = `<p class="muted">Erreur : ${e.message}</p>`;
+  }
+}
+
+window.onload = initGoogle;
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+}
+</script>
+</body>
+</html>
